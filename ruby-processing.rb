@@ -6,7 +6,6 @@
 # Most of the code here is for interfacing with Swing, 
 # web applets, going fullscreen, and drawing sliders.
 #
-# Revision 0.8
 # - omygawshkenas
 
 require 'java'
@@ -18,10 +17,9 @@ module Processing
   include_package "processing.core"
   
   class App < PApplet
+    include Math
     
     include_class "javax.swing.JFrame"
-    include_class "javax.swing.JPanel"
-    include_class "javax.swing.JLabel"
     
     # Alias some methods for familiarity for Shoes coders.
     attr_accessor :frame, :title
@@ -38,7 +36,9 @@ module Processing
                              :mouse_moved   =>   :mouseMoved, 
                              :mouse_released => :mouseReleased,
                              :key_pressed => :keyPressed,
-                             :key_released => :keyReleased }
+                             :key_released => :keyReleased,
+                             :key_typed => :keyTyped }
+             
                             
     def self.method_added(method_name)
       if METHODS_TO_WATCH_FOR.keys.include?(method_name)
@@ -46,9 +46,29 @@ module Processing
       end
     end
     
+    
+    # Class methods that we should make available in the instance.
+    [:map, :pow, :norm, :lerp, :second, :minute, :hour, :day, :month, :year, 
+     :sq, :constrain, :dist, :blend_color, :lerp_color].each do |meth|
+      method = <<-EOS
+        def #{meth}(*args)
+          self.class.#{meth}(*args)
+        end
+      EOS
+      eval method
+    end
+    
+    
     def self.current=(app); @current_app = app; end
     def self.current; @current_app; end
-    def self.slider_frame; @slider_frame; end
+    
+    
+    # Detect if we're online or not.
+    def self.online?
+      @online ||= Object.const_defined?(:JRUBY_APPLET)
+    end
+    def online?; self.class.online?; end
+    
     
     # Detect if a library has been loaded (for conditional loading)
     @@loaded_libraries = Hash.new(false)
@@ -57,23 +77,25 @@ module Processing
     end
     def library_loaded?(folder); self.class.library_loaded?(folder); end
     
+    
     # For pure ruby libs.
     # The library should have an initialization ruby file 
     # of the same name as the library folder.
     def self.load_ruby_library(folder)
       unless @@loaded_libraries[folder.to_sym]
-        Object.const_defined?(:JRUBY_APPLET) ? prefix = "" : prefix = "library/"
+        online? ? prefix = "" : prefix = "library/"
         @@loaded_libraries[folder.to_sym] = require "#{prefix}#{folder}/#{folder}"
       end
       return @@loaded_libraries[folder.to_sym]
     end
+    
     
     # Loading libraries which include native code needs to 
     # hack the Java ClassLoader, so that you don't have to 
     # futz with your PATH. But its probably bad juju.
     def self.load_java_library(folder)
       unless @@loaded_libraries[folder.to_sym]
-        if Object.const_defined?(:JRUBY_APPLET) # Applets preload all the java libraries.
+        if online? # Applets preload all the java libraries.
           @@loaded_libraries[folder.to_sym] = true if JRUBY_APPLET.get_parameter("archive").match(%r(#{folder}))
         else
           base = "library#{File::SEPARATOR}#{folder}#{File::SEPARATOR}"
@@ -98,73 +120,35 @@ module Processing
       return @@loaded_libraries[folder.to_sym]
     end
     
-    # Creates a slider, in a new window, to control an instance variable.
-    # Sliders take a name and a range (optionally), returning an integer.
+    
     def self.has_slider(name, range=0..100)
-      return if Object.const_defined?(:JRUBY_APPLET)
-      min, max = range.begin * 100, range.end * 100
       attr_accessor name
-      initialize_slider_frame unless @slider_frame
-      slider = Slider.new(min, max)
-      slider.add_change_listener do
-        val = slider.get_value / 100.0
-        slider.update_label(val)
-        Processing::App.current.send(name.to_s + "=", val)
-      end
-      slider.set_minor_tick_spacing((max - min).abs / 10) 
-      slider.set_paint_ticks true
-      slider.paint_labels = true
-      label = JLabel.new("<html><br>" + name.to_s + "</html>")
-      slider.label = label
-      slider.name = name
-      @slider_frame.sliders << slider
-      @slider_frame.panel.add label
-      @slider_frame.panel.add slider
+      return if online?
+      load_ruby_library 'slider'
+      extend Slider::ClassMethods
+      include Slider::InstanceMethods
+      create_slider(name, range)
     end
     
-    def self.initialize_slider_frame
-      @slider_frame ||= JFrame.new
-      class << @slider_frame
-        attr_accessor :sliders, :panel
-      end
-      @slider_frame.sliders ||= []
-      slider_panel ||= JPanel.new(java.awt.FlowLayout.new(1, 0, 0))
-      @slider_frame.panel = slider_panel
-    end
-    
-    def self.remove_slider_frame
-      if @slider_frame
-        @slider_frame.remove_all
-        @slider_frame.dispose
-        @slider_frame = nil
-      end
-    end
     
     def initialize(options = {})
       super()
-      App.current = self
+      $app = App.current = self
       options = {:width => 400, 
                 :height => 400, 
                 :title => "",
                 :full_screen => false}.merge(options)
       @width, @height, @title = options[:width], options[:height], options[:title]
-      display options
-      display_slider_frame if self.class.slider_frame
+      @render_mode = P2D
+      determine_how_to_display options
+      display_slider_frame if self.class.respond_to?('slider_frame') && self.class.slider_frame
     end
+    
     
     def inspect
       "#<Processing::App:#{self.class}:#{@title}>"
     end
-      
-    def display_slider_frame
-      f = self.class.slider_frame
-      f.add f.panel
-      f.set_size 200, 32 + (71 * f.sliders.size)
-      f.setDefaultCloseOperation(JFrame::DISPOSE_ON_CLOSE)
-      f.set_resizable false
-      f.set_location(@width + 10, 0)
-      f.show
-    end
+    
       
     def display_full_screen(graphics_env)
       @frame = java.awt.Frame.new
@@ -183,6 +167,7 @@ module Processing
       self.request_focus
     end
     
+    
     def display_in_a_window
       @frame = JFrame.new(@title)
       @frame.add(self)
@@ -193,8 +178,9 @@ module Processing
       self.init
     end
     
+    
     def display_in_an_applet
-      JRUBY_APPLET.setSize(@width, @height)
+      JRUBY_APPLET.set_size(@width, @height)
       JRUBY_APPLET.background_color = nil
       JRUBY_APPLET.double_buffered = false
       JRUBY_APPLET.add self
@@ -205,9 +191,10 @@ module Processing
       self.init
     end
     
+    
     # Tests to see which display method should run.
-    def display(options)
-      if Object.const_defined?(:JRUBY_APPLET) # Then display it in an applet.
+    def determine_how_to_display(options)
+      if online? # Then display it in an applet.
         display_in_an_applet
       elsif options[:full_screen] # Then display it fullscreen.
         graphics_env = java.awt.GraphicsEnvironment.get_local_graphics_environment.get_default_screen_device
@@ -217,6 +204,7 @@ module Processing
       end
     end
     
+    
     # There's just so many functions in Processing,
     # Here's a convenient way to look for them.
     def find_method(method_name)
@@ -224,50 +212,70 @@ module Processing
       self.methods.sort.select {|meth| reg.match(meth)}
     end
     
+    
     # Specify what rendering Processing should use.
     def render_mode(mode_const)
-      size(@width, @height, mode_const)
+      @render_mode = mode_const
+      size(@width, @height, @render_mode)
     end
+    
+    
+    # Nice block method to draw to a buffer.
+    # You can optionally pass it a width, a height, and a renderer.
+    # Takes care of starting and ending the draw for you.
+    def buffer(buf_width=width, buf_height=height, renderer=@render_mode)
+      buf = create_graphics(buf_width, buf_height, renderer)
+      buf.begin_draw
+      yield buf
+      buf.end_draw
+      buf
+    end
+    
+    
+    # Fix java conversion problems getting the last key
+    def key
+      field = java_class.declared_field 'key'
+      app = Java.ruby_to_java self
+      field.value app
+    end
+    
+    
+    # From ROP. Turns a color hash-string into hexadecimal, for Processing.
+    def hex(value)
+      value[1..-1].hex + 0xff000000
+    end
+    
     
     def mouse_x; mouseX; end
     def mouse_y; mouseY; end
     def pmouse_x; pmouseX; end
     def pmouse_y; pmouseY; end
+    def frame_count; frameCount; end
+    def mouse_button; mouseButton; end
+    
     
     def mouse_pressed?
       Java.java_to_primitive(java_class.field("mousePressed").value(java_object))
     end
     
+    
     def key_pressed?
       Java.java_to_primitive(java_class.field("keyPressed").value(java_object))
     end
     
+    
     def close
       Processing::App.current = nil
-      self.class.remove_slider_frame
+      self.class.remove_slider_frame if self.class.respond_to? 'remove_slider_frame'
       @frame.remove(self)
       self.destroy
       @frame.dispose
     end
+    
     
     def quit
       java.lang.System.exit(0)
     end
     
   end
-  
-  class Slider < javax.swing.JSlider
-    attr_accessor :name, :label
-    
-    def initialize(*args)
-      super(*args)
-    end
-    
-    def update_label(value)
-      value = value.to_s
-      value << "0" if value.length < 4
-      label.set_text "<html><br>#{@name.to_s}: #{value}</html>"
-    end
-  end
-    
 end
