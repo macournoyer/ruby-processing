@@ -1,64 +1,87 @@
 require 'ruby-processing'
 
-class Circle
-  attr_accessor :x, :y, :r
-  
-  def initialize(x, y, r, color)
-    @x, @y, @r, @color = x, y, r, color
-  end
-  
-  def draw(sketch)
-    sketch.push_matrix
-    sketch.fill *@color
-    sketch.translate @x, @y
-    # sketch.light_specular(1, 1, 1)
-    # sketch.directional_light(0.8, 0.8, 0.8, 0, 0, -1)
-    sketch.sphere @r
-    sketch.pop_matrix
+class Fixnum
+  def sec
+    self * 1000
   end
 end
 
 class Sketch < Processing::App
-  include Math
+  load_java_library "opengl"
   
   def setup
-    render_mode(P3D)
-    no_stroke
-    color_mode(RGB, 1)
-    frameRate 30
+    render_mode(OPENGL)
+    frame_rate 30
     
-    @center = Circle.new(200, 200, 100, [0.5, 0.1, 0])
-    @particles = [
-      Circle.new(100, 100, 10, [0.1, 0.8, 0.8]),
-      Circle.new(300, 100, 10, [0.1, 0.8, 0.8]),
-      Circle.new(100, 300, 10, [0.9, 0.9, 0.8]),
-      Circle.new(300, 300, 10, [0.1, 0.9, 0.1])
-    ]
-    @growing = true
-    @step = 0
+    hint(ENABLE_NATIVE_FONTS)
+    f = create_font("Lucida Grande", 66)
+    text_font f, 1.0
+    
+    fill 255
+    
+    at(1000) do
+      type "you", 0, 0
+    end
+    at(1200) do
+      type "need", 0, 1
+    end
+    at(1400) do
+      type "a", 0, 2
+    end
+    at(1700) do
+      rotate_z @rotate ||= 0.0
+      @rotate += 0.4 unless @rotate >= 1.6
+      
+      background 0
+      type "you", 0, 0
+      type "need", 0, 1
+      type "a", 0, 2
+    end
+    at(2000) do
+      type "LOL", 1, 2
+    end
+    at(2200) do
+      type "LOLCAT", 1, 2
+    end
+    at(2400) do
+      @x ||= 0
+      background 0
+      
+      @x -= 2
+      type "LOLCAT  ... rly!", @x, 2
+    end
+    at(2500) do
+    end
+
+    background 0
   end
   
   def draw
-    background 0
+    translate 80, 100
+    scale 75.0, 75.0, 75.0
+    text_width 100
     
-    if @growing
-      @center.r += 10
-      @growing = @center.r < 100
-    else
-      @center.r -= 1
-      @growing = @center.r < 90
+    run_markers
+  end
+  
+  def type(letter, x, y=0)
+    text letter, 0.6 * x, y
+  end
+  
+  @@markers = []
+  def at(time, &block)
+    @@markers << [time, block]
+    @@markers = @@markers.sort_by { |time, _| time }.reverse
+  end
+  
+  def run_markers
+    @@markers.each do |time, block|
+      if millis >= time
+        block.call
+        break
+      end
     end
-    
-    push_matrix
-    translate 200, 200
-    rotate_z @step
-    translate -200, -200
-    @step += @center.r / 10 + 50
-    
-    @particles.each { |p| p.draw(self) }
-    @center.draw(self)
-    pop_matrix
   end
 end
 
-Sketch.new :width => 400, :height => 400, :title => "Circle"
+Sketch.new :width => 400, :height => 400, :title => "Font"
